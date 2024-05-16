@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>      
+<head>
+    <title>Robot Controller</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>      
+  <h1>Self Balancing Robot Web Controller</h2>
+  <p>Connection Status: <span id="connectionStatusText" style="color:#ff0000;">Not connected!</span></p>
+  <button id="ConnectButton">Connect</button>
+  <button id="DisconnectButton">Disconnect</button><br><br>
+  <label for="write_input">Message:</label>
+  <input type="text" id="write_input" name="write_input"><br><br>
+  <button id="WriteButton">Write Value</button>
+  <div class="chart-container">
+    <canvas id="myChart"></canvas>
+  </div>
+  <style>
+    .chart-container {
+        width: 50%;
+    }
+</style>
+  <script>
+        let ctx = document.getElementById('myChart').getContext('2d');
+        let lineChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                datasets: [{
+                    label: 'Sensor Values',
+                    data: [],
+                    borderColor: 'rgb(75, 192, 192)',
+                    tension: 0.1
+                }]
+            },
+            options: {
+                animation: false,
+                scales: {
+                    y: {
+                        min: -1.5, 
+                        max: 1.5
+                    }
+                }
+            }
+        });
+    var SERVICE_ENVIRONMENT_UUID = "70a9dda7-b73c-42cb-9ef3-a452d0844d10"
+    var SERVICE_CONTROL_UUID =  "74741977-c0c4-4f8a-9831-a261f8b83d16";
+    
+    var CHARACTERISTIC_MOTOR_UUID = "c7c70dec-ee2d-4212-8183-49060f283bff"
+    var CHARACTERISTIC_ACC_UUID = "e72b4c33-50cb-4440-8f17-2a9bed3cf63a"
+
+    var Server = null;
+    var CharacteristicAcc = null;
+    var CharacteristicMotor = null;
+
+    const connectionStatusText = document.getElementById("connectionStatusText");
+    const ConnectButton = document.getElementById("ConnectButton");
+    ConnectButton.onclick=async() => {
+        await OnConnectClick();
+    };
+
+    const DisconnectButton = document.getElementById("DisconnectButton");
+    DisconnectButton.onclick=async() => {
+        await OnDisconnectClick();
+    };
+
+    const WriteButton = document.getElementById("WriteButton");
+    WriteButton.onclick=async() => {
+        await OnWriteClick();
+    };
+
+    async function OnWriteClick()
+    {
+        if (Server && Server.connected && CharacteristicMotor) 
+        {
+            if (!("TextEncoder" in window)) 
+                alert("Sorry, this browser does not support TextEncoder...");
+            var input_text = document.getElementById('write_input').value;
+            var enc = new TextEncoder();
+            var sendstring = enc.encode(input_text);
+            
+            console.log("Writing \'"+input_text+"\' to Device")
+            //const data = new Uint8Array([value]); // to write uints
+            CharacteristicMotor.writeValue(sendstring);
+        }
+        else
+        {
+            console.log("server or characteristic missing")
+        }
+    }
+
+    async function OnConnectClick() 
+    {
+        if (!navigator.bluetooth) {
+            window.alert("Bluetooth not available")
+            return;
+        }
+      await ConnectToESP();
+    }
+
+    async function OnDisconnectClick() 
+    {
+      document.getElementById("connectionStatusText").innerText = "Not connected!";
+      document.getElementById("connectionStatusText").style.color = "#FF0000";
+      if(CharacteristicAcc)
+      {
+        await CharacteristicAcc.stopNotifications();
+        CharacteristicAcc = null;
+      }
+      if(Server && Server.connected)
+      {
+        await Server.disconnect();
+        Server = null;
+      }
+    }
+
+    async function ConnectToESP()
+    {
+        console.log('Starting connection to ESP');
+        try 
+        {   
+            var BLE_device = await navigator.bluetooth.requestDevice({
+                acceptAllDevices:true,
+                optionalServices: [SERVICE_ENVIRONMENT_UUID,SERVICE_CONTROL_UUID]
+            })
+            document.getElementById("connectionStatusText").innerText = "Connected to \'" + BLE_device.name + "\'";
+            document.getElementById("connectionStatusText").style.color = "#00ff00";
+            console.log("Connected to \'" + BLE_device.name + "\'");
+        
+            BLE_device.addEventListener('gattservicedisconnected', onDeviceDisconnect);
+            Server = await BLE_device.gatt.connect();
+            console.log("Server connected");
+            var ServiceEnvironment = await Server.getPrimaryService(SERVICE_ENVIRONMENT_UUID);
+            console.log("Got Service:", ServiceEnvironment.uuid);
+            var ServiceControl = await Server.getPrimaryService(SERVICE_CONTROL_UUID);
+            console.log("Got Service:", ServiceControl.uuid);
+            CharacteristicAcc = await ServiceEnvironment.getCharacteristic(CHARACTERISTIC_ACC_UUID);
+            console.log("Got Characteristic:", CharacteristicAcc.uuid);
+            CharacteristicAcc.addEventListener('characteristicvaluechanged', onAccCharacteristicChange);
+            CharacteristicAcc.startNotifications();
+            CharacteristicMotor = await ServiceControl.getCharacteristic(CHARACTERISTIC_MOTOR_UUID);
+            console.log("Got Characteristic:", CharacteristicMotor.uuid);
+        } catch (error)
+        {
+            console.log("Error occured: ", error)
+        }
+    }
+
+    async function onDeviceDisconnect(e)
+    {
+        console.log('BLE Device \'' + e.target.device.name + "\' disconnected");
+        document.getElementById("connectionStatusText").innerText = "Not connected!";
+        document.getElementById("connectionStatusText").style.color = "#ff0000";
+
+        connectToDevice();
+    }
+
+    function onAccCharacteristicChange(e)
+    {
+        let decoded_value = new TextDecoder().decode(e.target.value);
+        console.log("Acc value change: ", decoded_value);
+        let newdata = parseFloat(decoded_value)
+        lineChart.data.labels.push(decoded_value);
+        lineChart.data.datasets[0].data.push(newdata);
+
+        if (lineChart.data.datasets[0].data.length >= 100) {
+        // Remove the oldest data point if the limit is reached
+        lineChart.data.datasets[0].data.shift();
+        lineChart.data.labels.shift();
+
+        }
+        // Update the chart
+        lineChart.update();
+    }
+  </script>
+</body>
+</html>
